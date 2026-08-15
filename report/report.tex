@@ -1,0 +1,487 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[margin=2.0cm]{geometry}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{array}
+\hypersetup{colorlinks=true, linkcolor=blue, urlcolor=blue, citecolor=blue}
+\setlength{\parskip}{0.28em}
+\setlength{\parindent}{0pt}
+
+\title{A Structured Questioner for Collaborative Instance Navigation:\\
+Prompt Design, Data Construction, and Model Selection\\
+for the CoIN Challenge 2026}
+\author{Ning Yang}
+\date{August 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We present a questioner for the CoIN Challenge 2026. The agent is
+Qwen3-VL-32B-Instruct, fine-tuned with two-stage QLoRA on (i)~synthetic
+instance pairs labeled under a frozen structured prompt and
+(ii)~ground-truth-validated pairs from the official training episodes.
+A category-only question-deduplication rule is applied at inference.
+Development follows a pre-registered ranking of full-success rate (FR),
+then success rate (SR), then questions per observation (NQ). On a
+leakage-free holdout of 47 official episodes, mixing official data into
+Stage~2 (Mix-FT) matches the synthetic-only fine-tune on FR
+(0.713 vs.\ 0.709) while cutting NQ from 3.45 to 0.67. The submitted
+weights (Full-FT) additionally absorb the holdout episodes with the
+same recipe. Ablations cover oracle identity, prompt family, backbone
+choice (including a full Qwen3.6-27B replica that does \emph{not}
+transfer), ask/conclude ratio, and a rejected chain-rebalancing branch.
+\end{abstract}
+
+\section{Task, Metrics, and Protocol}
+
+Given a natural-language description of a target object and a stream of
+candidate images, the agent must accept the candidate as the target
+instance (score 2), reject it (score 0), or ask the oracle one
+clarifying question (score 1)~\cite{zorzi2026coinqa,taioli2025coin}.
+Official training data comprise 167 episodes (50 categories, 367
+images) and six description types: category, color, context,
+color+feature, color+context, and color+context+feature.
+
+\paragraph{Metrics.}
+SR is the per-episode fraction of correct decisions, averaged over
+episodes: the denominator is the number of successes if the episode is
+fully solved, otherwise successes$+1$ (the episode stops at the first
+error). FR is the fraction of episodes in which every decision is
+correct. NQ/obs is the per-episode ratio of questions to observations,
+then averaged. Ask rate is the fraction of episodes with at least one
+question. We do \emph{not} use a global $\sum$successes$/\sum$observations
+ratio: that statistic weights long episodes and can exceed 1 when
+observations are de-duplicated by pixel identity.
+
+\paragraph{Selection rule.}
+FR first, SR second, lower NQ as tie-break. All reported numbers use
+temperature 0. Unless noted, development uses a frozen local oracle,
+Qwen3-VL-32B-Instruct. Model selection never trains on a 47-episode
+holdout obtained by splitting official episodes along shared-image
+connected components (zero image leakage).
+
+\paragraph{Naming.}
+For readability we use paper names rather than checkpoint identifiers.
+The frozen inference/data prompt is the \emph{Structured Attribute
+Prompt} (SAP). Fine-tuned 32B variants are Syn-FT (synthetic Stage~2
+only), Mix-FT (Stage~2 continued on official train-split pairs),
+Chain-FT (a rejected rebalancing branch), and Full-FT (submitted;
+Mix-FT recipe with holdout pairs included). Release adapters in the
+package are labeled \texttt{v3d}/\texttt{v3o}/\texttt{v3p}/\texttt{v3f}
+respectively.
+
+\section{Oracle Identity}
+\label{sec:oracle}
+
+With the challenge-provided 7B questioner and the paper prompt under
+raw decoding, we compared Qwen2.5-VL-32B-Instruct and
+Qwen3-VL-32B-Instruct as oracles on all 167 episodes
+(Table~\ref{tab:oracle}). Mean $|\Delta\mathrm{SR}|$ is below 0.01 on
+every type. Under this low-ask regime the questioner almost never
+queries the oracle, so oracle identity cannot move the metric. Qwen3 is
+slightly better on color/context and slightly worse on category; we
+freeze Qwen3-VL-32B as the development oracle thereafter. The practical
+implication is that oracle quality matters mainly in high-ask policies
+and in \emph{labeling} (Section~\ref{sec:data}), not in a silent
+baseline.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcccc}
+\toprule
+Type & Qwen2.5-32B SR/FR/NQ & Qwen3-32B SR/FR/NQ & $\Delta$SR \\
+\midrule
+category & 0.280/0.263/0.009 & 0.274/0.257/0.009 & $-0.006$ \\
+color & 0.591/0.485/0.058 & 0.594/0.497/0.068 & $+0.003$ \\
+context & 0.567/0.439/0.156 & 0.574/0.445/0.146 & $+0.007$ \\
+color+feature & 0.712/0.571/0.138 & 0.707/0.574/0.155 & $-0.005$ \\
+color+context & 0.736/0.634/0.201 & 0.741/0.638/0.198 & $+0.004$ \\
+color+ctx+feat. & 0.712/0.586/0.267 & 0.706/0.589/0.249 & $-0.005$ \\
+\bottomrule
+\end{tabular}
+\caption{Oracle swap with a low-ask paper prompt and the 7B challenge
+questioner, full 167 episodes. Differences are negligible.}
+\label{tab:oracle}
+\end{table}
+
+\section{Prompt Selection}
+\label{sec:prompt}
+
+All prompts share a three-field output schema: a
+\texttt{<motivation>} span, a \texttt{<score>} in $\{0,1,2\}$, and a
+\texttt{<question>} that is either a single query or \texttt{None}.
+We iterate the \emph{instruction} while holding the schema fixed, so
+that supervised labels and inference stay aligned.
+
+\subsection{Paper family on the 7B questioner}
+Table~\ref{tab:prompt7b} averages six types (full 167 episodes, Qwen3
+oracle, raw decoding). \emph{Paper} is the QAsk-Nav wording.
+\emph{Paper-YN} adds a yes/no discriminative-question constraint.
+\emph{Adaptive} writes an information-dependent ask/conclude rule into
+a single prompt (ask when the description is underspecified; conclude
+when attributes already suffice). \emph{Uncertainty gating} forces an
+ask when the model emits a confident score but hesitant wording.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lccc}
+\toprule
+Prompt / policy & SR & FR & NQ/obs \\
+\midrule
+Paper + raw decoding & 0.600 & 0.500 & 0.138 \\
+Paper-YN + raw decoding & 0.616 & 0.491 & 0.088 \\
+Adaptive + raw decoding & 0.615 & 0.491 & 0.089 \\
+Paper + uncertainty gating & 0.719 & 0.562 & 0.838 \\
+\bottomrule
+\end{tabular}
+\caption{Prompt and policy means on the 7B questioner (six types,
+167 episodes). Uncertainty gating is discarded as a spurious gain.}
+\label{tab:prompt7b}
+\end{table}
+
+Uncertainty gating looks best on SR/FR but inflates NQ six-fold.
+About 70\% of its questions are a canned template (``Besides what is
+already stated in \ldots''). The SR lift comes from forcing a second
+look at the image, not from informative questions. We discard it.
+
+Paper-YN and Adaptive are essentially tied and both beat Paper.
+Adaptive matches Paper-YN without a per-type switch: category/context
+SR rise ($+0.029$ / $+0.040$ vs.\ Paper) while NQ on
+attribute-rich types falls (e.g.\ color $0.068\rightarrow 0.042$).
+Questions under Adaptive on color+feature are genuine yes/no checks,
+not templates. We therefore take Adaptive as the best
+\emph{single-prompt} member of the paper family.
+
+\subsection{Why a new prompt is needed}
+Two failures of Adaptive motivate a rewrite. First, ``the description
+is already specific, so do not ask'' treats text informativeness as a
+sufficient statistic for the decision. A specific attribute that is
+occluded in the current view still requires a question. Second,
+discriminative questions anchored on the \emph{candidate} image do not
+transfer to the next view; the official protocol instead asks the
+oracle about the hidden \emph{target} image in order to build a
+reusable instance profile~\cite{zorzi2026coinqa}.
+
+\subsection{Profile prompts, then SAP}
+\emph{Profile-V1} forces OBSERVE $\rightarrow$ COMPARE $\rightarrow$
+DECIDE in \texttt{<motivation>}, scores each stated attribute as
+MATCHED / CONTRADICTED / UNVERIFIABLE, and requires questions to
+request a new target-side attribute that is also checkable on
+candidates. Putting Profile-V1 on the 7B fine-tune \emph{without}
+relabeling fails: the model ignores the three-step format, over-asks
+on specific types, and on long contexts degenerates into repeated
+tokens. The same prompt on \emph{native} Qwen3-VL-32B succeeds
+(Table~\ref{tab:native32}): category SR $0.340\rightarrow 0.436$,
+color+feature $0.726\rightarrow 0.753$, with explicit Step~1/2/3
+throughout and no loops. The 7B failure was train/test prompt
+mismatch, not a bad prompt.
+
+\emph{Profile-V2} compresses reasoning ($<120$ words) and forbids
+score~2 unless a distinguishing attribute is present. On native 32B it
+is uniformly worse than V1 (mean SR $0.694$ vs.\ $0.709$, FR $0.608$
+vs.\ $0.633$) except for a small category SR bump paid for with much
+higher NQ. Compactness alone is not an improvement.
+
+An intermediate 32B fine-tune on Profile-V2 labels raised category SR
+from native V1's 0.436 to 0.529 but lagged on several specific types.
+That split---gains concentrated on type-only descriptions, losses on
+richer ones---motivated rebuilding labels under a stricter protocol
+rather than shipping the V2 model.
+
+SAP (frozen for all later data and inference) keeps V1's three-step
+compare protocol and V2's length cap, and adds stricter decision
+rules: score~0 if the described type is absent or any stated attribute
+is contradicted; score~1 if the description is type-only or any stated
+attribute is unverifiable; score~2 only when every \emph{stated}
+attribute matches and none is unverifiable. Questions ask exactly one
+new target attribute. On native 32B, SAP raises mean SR/FR to
+$0.739/0.653$ with NQ $0.402$ (category NQ $1.11$, ask rate $99\%$).
+It is not uniformly best versus V1 on every attribute-rich type (V1
+files there are slightly incomplete, $n=127$--$164$), but it is the
+protocol we need in \emph{labels}: every stated attribute is audited,
+type-only descriptions must ask, and the same text is used at train
+and test. We freeze SAP from data generation onward.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcccc}
+\toprule
+Setting (native 32B, raw decoding) & SR & FR & NQ/obs & Ask rate \\
+\midrule
+Adaptive, category & 0.340 & 0.311 & 0.162 & 22\% \\
+Profile-V1, category & \textbf{0.436} & \textbf{0.395} & 0.436 & 49\% \\
+Adaptive, color+feature & 0.726 & 0.640 & 0.030 & 7\% \\
+Profile-V1, color+feature & \textbf{0.753} & \textbf{0.659} & 0.077 & 9\% \\
+Profile-V1 (six-type mean$^\dagger$) & \textbf{0.709} & \textbf{0.633} & 0.128 & 16\% \\
+Profile-V2 (six types, $n{=}167$) & 0.694 & 0.608 & 0.164 & 20\% \\
+SAP (six types, $n{=}167$) & 0.739 & 0.653 & 0.402 & 40\% \\
+\bottomrule
+\end{tabular}
+\caption{Native Qwen3-VL-32B prompt comparison. $^\dagger$Some V1
+attribute-type files are slightly incomplete ($n=127$--$164$); the mean
+is the best available V1 estimate.}
+\label{tab:native32}
+\end{table}
+
+\section{Backbone Selection}
+\label{sec:backbone}
+
+Replacing the 7B challenge questioner with native Qwen3-VL-32B under
+SAP is the first large jump (Section~\ref{sec:prompt}). We then swap
+only the questioner to native Qwen3.6-27B, keeping SAP, raw decoding,
+temperature 0, and the same 32B oracle (Table~\ref{tab:q36zs}). Mean
+SR/FR rise ($0.739\rightarrow 0.748$, $0.653\rightarrow 0.665$) and
+NQ drops 55\% ($0.402\rightarrow 0.182$). Five of six types improve;
+only context regresses. Category NQ falls from $1.11$ to $0.70$.
+(Category $n{=}166$ for Qwen3.6, one missing stove episode; other
+types $n{=}167$.) Native Qwen3.6 is the stronger \emph{zero-shot}
+questioner.
+
+We nevertheless fine-tune Qwen3-VL-32B: the QLoRA, image-size, and
+serving stack were validated on that architecture, and a stronger
+zero-shot prior does not imply that an ask-heavy supervised recipe
+will transfer. Section~\ref{sec:q36ft} reports a full replica that
+loses on holdout FR; the submitted backbone remains 32B.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcc}
+\toprule
+Type & Qwen3.6-27B SR/FR/NQ & Qwen3-VL-32B SR/FR/NQ \\
+\midrule
+category & 0.679/0.590/0.699 & 0.659/0.575/1.114 \\
+color & 0.682/0.599/0.066 & 0.672/0.557/0.295 \\
+context & 0.648/0.557/0.146 & 0.685/0.605/0.351 \\
+color+feature & 0.768/0.683/0.046 & 0.742/0.653/0.351 \\
+color+context & 0.845/0.767/0.068 & 0.836/0.749/0.172 \\
+color+ctx+feat. & 0.868/0.796/0.071 & 0.839/0.778/0.127 \\
+\midrule
+Mean & \textbf{0.748}/\textbf{0.665}/\textbf{0.182} & 0.739/0.653/0.402 \\
+\bottomrule
+\end{tabular}
+\caption{Zero-shot SAP, same oracle and policy, full official set.
+Qwen3.6 asks less and scores slightly higher.}
+\label{tab:q36zs}
+\end{table}
+
+\section{Data Construction}
+\label{sec:data}
+
+Labels are generated with SAP frozen, so the supervised distribution
+matches inference. We never train on raw code-variable dumps; each
+sample is a (description, candidate image, optional dialogue,
+motivation, score, question) tuple.
+
+\subsection{Synthetic instances}
+Candidate images come primarily from Habitat renders of CoIN-Bench /
+HM3D episodes (target views and nearby viewpoints), plus
+same-category cross-instance pairing as hard negatives. InstructPix2Pix
+appearance edits were prototyped and then demoted: geometric renders
+are the main source. Each pair is labeled by Gemini Flash under SAP.
+Strata with low Flash/Pro agreement are escalated to Gemini Pro (Pro
+is the final arbiter); invalid or persistently conflicting items are
+quarantined rather than force-labeled.
+
+Multi-turn chains (0--6 rounds) are collected with Flash as questioner
+and Pro as answerer against the target reference. We then delete
+degenerate behavior: near-duplicate questions, answers that contradict
+already-stated history, and reasoning that ignores available context
+(the dominant failure mode of an early fine-tune). The
+train/validation cut is at instance level, not image crop level.
+
+\subsection{Two-stage supervision}
+Following QAsk-Nav~\cite{zorzi2026coinqa}: Stage~1 trains motivation
+plus score on all labeled pairs (20{,}653 examples) with empty
+question slots, to stabilize the schema. Stage~2 continues on the
+full schema with an ask-weighted mix. A 10:1 ask:conclude branch is
+dominated by 5:1 on a 60-episode slice (SR 0.773 / FR 0.669 / NQ 7.12
+vs.\ 0.806 / 0.700 / 4.63); extra ask mass amplifies repeat questions.
+We keep 5:1 (8{,}259 Stage~2 examples). Training is QLoRA, 4-bit NF4,
+LoRA rank 16 ($\approx 40$M trainable parameters on 32B), images
+resized to $224^2$, 7-GPU DDP, learning rate $1\times 10^{-4}$ for
+Stages~1--2 and $5\times 10^{-5}$ for official continuations, one epoch
+per stage.
+
+\subsection{Official episodes, without leakage}
+Synthetic images do not overlap the official 367 files. To use official
+episodes without contaminating the test of generalization, we split the
+167 episodes by shared-image connected components into 120 train / 47
+holdout episodes. Holdout images never appear in Mix-FT training.
+
+On the 120-episode split we label all description$\times$candidate
+pairs (2{,}298) with Flash under SAP and \emph{validate against episode
+ground truth}:
+\begin{itemize}
+\item agreeing conclusions are kept (1{,}484);
+\item Flash-match vs.\ GT-reject conflicts (296 of 302 disagreements)
+are dropped from conclusion training---these are exactly the
+underspecified cases the benchmark wants the agent to \emph{ask}
+about, so teaching a hard accept would be label noise;
+\item depth-0 ask outputs are kept (496).
+\end{itemize}
+This yields 1{,}980 in-domain examples mixed into Stage~2 (10{,}239
+total) for a one-epoch continuation from Syn-FT (Mix-FT).
+
+After selecting Mix-FT we apply the same pipeline to the 47 holdout
+episodes (870 pairs $\rightarrow$ 716 kept: 190 ask / 229 match / 297
+reject) and continue from the same Syn-FT initialization (Full-FT;
+10{,}955 Stage~2 examples). Selection numbers always cite Mix-FT on
+holdout; Full-FT is the submitted weight.
+
+\subsection{A rejected rebalancing branch}
+Mix-FT regresses on context and color+feature, consistent with
+official conclusions suppressing questions. We built 636
+GT-checked one-round chains (138 forced asks, 355 contextual rejects,
+143 matches) and down-sampled official rejects to $1.2\times$ matches
+(Chain-FT). Holdout FR fell to 0.677 (Table~\ref{tab:holdout}). At this
+scale the natural official label mix is closer to optimal than
+hand-rebalanced chains. Chain-FT is not used.
+
+\section{Inference Policy}
+\label{sec:policy}
+
+Syn-FT on category-only descriptions enters repeat-ask loops. A
+lightweight rule detects near-duplicate questions (Jaccard $\geq 0.6$
+over content tokens of length $\geq 2$) or budget exhaustion, then
+re-prompts once to decide from answers already collected (fallback:
+reject). Applying this rule to \emph{all} types cuts NQ to 0.74 but
+costs up to 13pp FR on color. Restricting it to category is strictly
+helpful on the full 167 set (category SR $0.663\rightarrow 0.725$,
+FR $0.569\rightarrow 0.641$, NQ $10.2\rightarrow 1.05$). All reported
+fine-tune numbers use this hybrid policy: forced decision on category,
+raw decoding otherwise.
+
+\section{Main Results and Selection}
+\label{sec:main}
+
+\subsection{Holdout-47 (clean benchmark)}
+Table~\ref{tab:holdout} is the selection table. Syn-FT raises FR over
+zero-shot SAP but explodes NQ. Mix-FT keeps FR (0.713 vs.\ 0.709) and
+reduces NQ five-fold. Per type, official data helps category
+(FR $0.596\rightarrow 0.745$, SR $0.713\rightarrow 0.840$) and
+color+context (FR $0.766\rightarrow 0.830$), with some loss on context
+and color+feature. Under the pre-registered rule Mix-FT wins. Chain-FT
+is dominated on FR.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lccc}
+\toprule
+Qwen3-VL-32B, hybrid policy, holdout-47 & SR & FR & NQ/obs \\
+\midrule
+Zero-shot + SAP & 0.766 & 0.688 & 0.41 \\
+Syn-FT & \textbf{0.823} & 0.709 & 3.45 \\
+Mix-FT (selected) & 0.801 & \textbf{0.713} & 0.67 \\
+Chain-FT (not used) & 0.772 & 0.677 & 0.54 \\
+\bottomrule
+\end{tabular}
+\caption{Leakage-free holdout, six types averaged. Mix-FT is selected
+by FR, then SR, then NQ.}
+\label{tab:holdout}
+\end{table}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcc}
+\toprule
+Type & Syn-FT SR/FR/NQ & Mix-FT SR/FR/NQ \\
+\midrule
+category & 0.713/0.596/0.98 & \textbf{0.840}/\textbf{0.745}/0.83 \\
+color & 0.836/0.681/5.58 & 0.779/0.681/\textbf{1.20} \\
+context & \textbf{0.881}/\textbf{0.787}/3.21 & 0.720/0.660/0.56 \\
+color+feature & 0.817/0.660/3.11 & 0.755/0.596/0.53 \\
+color+context & 0.857/0.766/3.72 & 0.872/\textbf{0.830}/0.70 \\
+color+ctx+feat. & 0.833/0.766/4.09 & 0.840/0.766/\textbf{0.18} \\
+\midrule
+Mean & 0.823/0.709/3.45 & 0.801/\textbf{0.713}/\textbf{0.67} \\
+\bottomrule
+\end{tabular}
+\caption{Holdout-47 by description type. Official pairs mainly repair
+category behavior and suppress redundant questions.}
+\label{tab:holdout-type}
+\end{table}
+
+\subsection{Full-FT sanity}
+Continuing from Syn-FT with all 167 official episodes included, a
+same-slice sanity on the first 60 episodes per type shows no
+regression vs.\ Mix-FT: Mix-FT SR/FR/NQ $0.768/0.667/0.68$ vs.\
+Full-FT $0.768/0.678/0.61$, with category FR $0.517\rightarrow 0.633$.
+Full-FT is the submitted weight. Clean-benchmark numbers remain Mix-FT
+on holdout-47.
+
+On the \emph{full} 167 episodes, Syn-FT plus the hybrid policy already
+beats native SAP (mean SR $0.814$ / FR $0.714$ / NQ $3.88$ vs.\
+$0.739/0.653/0.40$). Mix-FT/Full-FT exist to keep that accuracy while
+making NQ competition-plausible.
+
+\subsection{Replica on Qwen3.6-27B}
+\label{sec:q36ft}
+We repeat Stage~1, Stage~2 (5:1), and Mix-FT on Qwen3.6-27B with the
+same files, hyperparameters, holdout, SAP, and hybrid policy
+(Table~\ref{tab:q36ft}). Native Qwen3.6 was stronger; after the same
+SFT recipe both Syn-FT and Mix-FT trail the 32B counterparts on FR
+and SR. Mix-FT NQ is competitive (0.54 vs.\ 0.67) but cannot overturn
+the FR gap ($-6.4$pp). We therefore do not switch the submission.
+The likely cause is a mismatch between an already-conservative
+zero-shot prior and ask-heavy Stage~2 data, not a failed load: a
+smoke test of the 3.6 adapter produces well-formed SAP outputs.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcc}
+\toprule
+Holdout-47, hybrid policy & Qwen3.6-27B & Qwen3-VL-32B \\
+\midrule
+Syn-FT mean SR/FR/NQ & 0.779/0.642/3.15 & \textbf{0.823}/\textbf{0.709}/3.45 \\
+Mix-FT mean SR/FR/NQ & 0.768/0.649/0.54 & \textbf{0.801}/\textbf{0.713}/0.67 \\
+\bottomrule
+\end{tabular}
+\caption{Same data and recipe on two backbones. Fine-tuning does not
+preserve Qwen3.6's zero-shot advantage; 32B Mix-FT remains selected.}
+\label{tab:q36ft}
+\end{table}
+
+\section{Submitted System}
+
+Questioner: Qwen3-VL-32B-Instruct with the Full-FT LoRA adapter
+(rank 16), SAP, temperature 0, hybrid policy (forced decision only on
+category-only descriptions). Development oracle: Qwen3-VL-32B-Instruct.
+The package includes the adapter, optional merged bf16 weights, Mix-FT
+as a clean-benchmark backup, data and training scripts, and the frozen
+prompt. Serve with vLLM \texttt{--enable-lora} on the bf16 base, or
+serve the merged checkpoint directly.
+
+\section{Reproducibility Notes}
+Connected-component episode IDs, Stage~2 manifests, and the exact SAP
+string live in the code directory. Metrics are recomputed from dumped
+JSON with a single script that implements Section~1. Continuation runs
+always start from Syn-FT, not from Mix-FT, so Mix-FT and Full-FT are
+parallel forks rather than a chain.
+
+\begin{thebibliography}{9}
+\bibitem{taioli2025coin}
+F.~Taioli, E.~Zorzi, G.~Franchi, A.~Castellini, A.~Farinelli,
+M.~Cristani, Y.~Wang.
+Collaborative Instance Object Navigation: Leveraging Uncertainty-Awareness
+to Minimize Human-Agent Dialogues. In \emph{ICCV}, 2025.
+
+\bibitem{zorzi2026coinqa}
+E.~Zorzi, F.~Taioli, Y.~Wang, M.~Cristani, A.~Farinelli, A.~Castellini,
+L.~Bazzani.
+Benchmarking Interaction, Beyond Policy: a Reproducible Benchmark for
+Collaborative Instance Object Navigation. arXiv:2604.00265, 2026.
+\end{thebibliography}
+
+\end{document}

@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual envs
+coin_env/
+vllm_env/
+.venv/
+venv/
+
+# Do not commit model weights. Host them on Hugging Face.
+weights/
+*.safetensors
+*.bin
+
+# Challenge images (download from Hugging Face)
+images/
+*.png
+*.jpg
+*.jpeg
+*.npy
+
+# Local eval artifacts
+results/
+*.log
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
