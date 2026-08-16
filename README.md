@@ -1,6 +1,6 @@
 # CoIN Challenge 2026 — Questioner Submission
 
-**Author:** Ning Yang
+**Authors:** Ning Yang (Nanjing University; Institute of Automation, CAS) and Yan Huang (University of Chinese Academy of Sciences; Institute of Automation, CAS; FiveAges)
 
 | | URL |
 | --- | --- |
