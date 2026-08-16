@@ -13,6 +13,61 @@ Technical report: [`report/report.pdf`](report/report.pdf).
 
 ---
 
+## For organizers: hidden-test evaluation
+
+This is the submitted system. **Do not change prompt or policy flags.**
+Defaults already match the submission: SAP (`our_prompt_v3`) and
+`dedup_category_only` (dedup only on `category`; other types = raw model).
+
+**1. Weights** — https://huggingface.co/Njoker/CoIN_Challenge_NY  
+Use the merged 32B checkpoint in `merged/` (not the LoRA adapter).
+
+```bash
+hf download Njoker/CoIN_Challenge_NY --include "merged/*" --local-dir weights/hf_merged
+```
+
+**2. Serve the questioner** (vLLM). The `--served-model-name` must match
+`QUESTIONER_MODEL_ID` below.
+
+```bash
+vllm serve weights/hf_merged/merged \
+  --host 0.0.0.0 --port 8001 --dtype bfloat16 --tensor-parallel-size 4 \
+  --max-model-len 6000 --max-num-seqs 2 --gpu-memory-utilization 0.92 \
+  --limit-mm-per-prompt '{"image":8,"video":0}' \
+  --served-model-name Njoker/CoIN_Challenge_NY
+```
+
+**3. Oracle** — any `OracleInterface` VLM on port 8000 (we used
+Qwen3-VL-32B-Instruct). Place test images where `episodes_test.jsonl`
+paths point (typically `images/`).
+
+**4. Run**, from the repo root. Put `episodes_test.jsonl` in the repo root
+or in `code/`. `<N>` is the number of test episodes.
+
+```bash
+export QUESTIONER_MODEL_ID=Njoker/CoIN_Challenge_NY QUESTIONER_VLLM_PORT=8001
+export ORACLE_MODEL_ID=Qwen/Qwen3-VL-32B-Instruct ORACLE_VLLM_PORT=8000
+python eval_model.py 0 <N> --local 1 --description-type all --run-type test
+```
+
+Equivalent: `EPISODES_JSONL_OVERRIDE=/path/to/episodes_test.jsonl` and omit
+`--run-type`. Temperature is 0 by default.
+
+If you plug `code/Questioner.py` into the official starter instead, instantiate:
+
+```python
+QuestionerLocalVLM(
+    info, model_id=os.environ["QUESTIONER_MODEL_ID"],
+    port=int(os.environ.get("QUESTIONER_VLLM_PORT", 8001)),
+    prompt_variant="our_prompt_v3",
+    policy="dedup_category_only",
+    description_type=task_type,
+    temperature=0.0,
+)
+```
+
+---
+
 ## Hugging Face weights
 
 https://huggingface.co/Njoker/CoIN_Challenge_NY
