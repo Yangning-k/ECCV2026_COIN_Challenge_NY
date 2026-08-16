@@ -2,69 +2,108 @@
 
 **Author:** Ning Yang
 
-A structured questioner for Collaborative Instance Navigation (question-asking protocol).
-The submitted agent is **Qwen3-VL-32B-Instruct** fine-tuned with two-stage QLoRA
-(Full-FT). Inference uses a frozen **Structured Attribute Prompt (SAP)** and a
-**category-only** question-deduplication rule.
+| | URL |
+| --- | --- |
+| **Code** | https://github.com/Yangning-k/ECCV2026_COIN_Challenge_NY |
+| **Weights** | https://huggingface.co/Njoker/CoIN_Challenge_NY |
+| **Report** | [`report/report.pdf`](report/report.pdf) |
 
-Selection metric order: **FR > SR > NQ**. All reported numbers use temperature 0.
-
-Technical report: [`report/report.pdf`](report/report.pdf).
+Submitted agent: **Qwen3-VL-32B-Instruct** + Full-FT LoRA (merged bf16).
+Inference: frozen Structured Attribute Prompt (SAP = `our_prompt_v3`) and
+`dedup_category_only` (dedup only on `category`; other types = raw model).
+Temperature **0**. Metric order: FR > SR > NQ.
 
 ---
 
-## For organizers: hidden-test evaluation
+## For organizers: download and run the hidden test
 
-This is the submitted system. **Do not change prompt or policy flags.**
-Defaults already match the submission: SAP (`our_prompt_v3`) and
-`dedup_category_only` (dedup only on `category`; other types = raw model).
+**Do not pass `--prompt-variant` or `--policy`.** Defaults in this repo already
+are the submitted system (`our_prompt_v3` + `dedup_category_only`, temperature 0).
 
-**1. Weights** — https://huggingface.co/Njoker/CoIN_Challenge_NY  
-Use the merged 32B checkpoint in `merged/` (not the LoRA adapter).
+### A. Clone the code
 
 ```bash
-hf download Njoker/CoIN_Challenge_NY --include "merged/*" --local-dir weights/hf_merged
+git clone https://github.com/Yangning-k/ECCV2026_COIN_Challenge_NY.git
+cd ECCV2026_COIN_Challenge_NY
+source scripts/install.sh
+source scripts/install_vllm.sh
 ```
 
-**2. Serve the questioner** (vLLM). The `--served-model-name` must match
-`QUESTIONER_MODEL_ID` below.
+### B. Download the model
+
+Use the **merged 32B** folder `merged/`, not the LoRA adapter files.
 
 ```bash
-vllm serve weights/hf_merged/merged \
+hf download Njoker/CoIN_Challenge_NY --local-dir weights/hf
+# After download you must have: weights/hf/merged/config.json
+# and weights/hf/merged/model-00001-of-00014.safetensors
+```
+
+### C. Serve the questioner (vLLM)
+
+`--served-model-name` must equal `QUESTIONER_MODEL_ID` in step E.
+
+```bash
+vllm serve weights/hf/merged \
   --host 0.0.0.0 --port 8001 --dtype bfloat16 --tensor-parallel-size 4 \
   --max-model-len 6000 --max-num-seqs 2 --gpu-memory-utilization 0.92 \
   --limit-mm-per-prompt '{"image":8,"video":0}' \
   --served-model-name Njoker/CoIN_Challenge_NY
 ```
 
-**3. Oracle** — any `OracleInterface` VLM on port 8000 (we used
-Qwen3-VL-32B-Instruct). Place test images where `episodes_test.jsonl`
-paths point (typically `images/`).
+### D. Hidden-test files and oracle
 
-**4. Run**, from the repo root. Put `episodes_test.jsonl` in the repo root
-or in `code/`. `<N>` is the number of test episodes.
+Keep your official eval harness, or use `eval_model.py` in this repo.
+
+1. Put the hidden-test episode file where the script can see it, **same schema
+   as** `code/episodes_train.jsonl`, named `episodes_test.jsonl` (repo root or
+   `code/`), **or** set `EPISODES_JSONL_OVERRIDE=/absolute/path/to/your.jsonl`.
+2. Put test images where the JSONL `path` fields point (usually `images/...`
+   relative to the process working directory, or next to the JSONL).
+3. Serve your Oracle VLM on port 8000 (`OracleInterface` / OpenAI-compatible
+   vLLM). Development used Qwen3-VL-32B-Instruct.
+
+### E. Run (this repo's eval)
+
+From the **repository root**. Replace `<N>` with the number of test episodes.
 
 ```bash
-export QUESTIONER_MODEL_ID=Njoker/CoIN_Challenge_NY QUESTIONER_VLLM_PORT=8001
-export ORACLE_MODEL_ID=Qwen/Qwen3-VL-32B-Instruct ORACLE_VLLM_PORT=8000
+export QUESTIONER_MODEL_ID=Njoker/CoIN_Challenge_NY
+export QUESTIONER_VLLM_PORT=8001
+export ORACLE_MODEL_ID=Qwen/Qwen3-VL-32B-Instruct   # or your oracle served name
+export ORACLE_VLLM_PORT=8000
+
 python eval_model.py 0 <N> --local 1 --description-type all --run-type test
 ```
 
-Equivalent: `EPISODES_JSONL_OVERRIDE=/path/to/episodes_test.jsonl` and omit
-`--run-type`. Temperature is 0 by default.
+If the JSONL is not named `episodes_test.jsonl`:
 
-If you plug `code/Questioner.py` into the official starter instead, instantiate:
+```bash
+export EPISODES_JSONL_OVERRIDE=/path/to/hidden_test.jsonl
+python eval_model.py 0 <N> --local 1 --description-type all
+```
+
+### F. If you keep the official starter and only drop in our Questioner
+
+Copy `code/Questioner.py` over the starter `Questioner.py` (keep starter
+`eval_model.py` / `env.py`). Wire the questioner as:
 
 ```python
-QuestionerLocalVLM(
-    info, model_id=os.environ["QUESTIONER_MODEL_ID"],
+from Questioner import QuestionerLocalVLM
+questioner = QuestionerLocalVLM(
+    info,
+    model_id=os.environ["QUESTIONER_MODEL_ID"],
     port=int(os.environ.get("QUESTIONER_VLLM_PORT", 8001)),
     prompt_variant="our_prompt_v3",
     policy="dedup_category_only",
-    description_type=task_type,
+    description_type=task_type,  # current episode description type
     temperature=0.0,
 )
 ```
+
+Set the same `QUESTIONER_*` environment variables as in step E, and serve
+`weights/hf/merged` as in step C. Pass `description_type` through from the
+eval loop so category-only dedup is applied only on category episodes.
 
 ---
 
@@ -132,40 +171,11 @@ hf download --repo-type dataset e-zorzi/images_coin_challenge --local-dir images
 
 ## Inference (submitted system)
 
-**Defaults in `eval_model.py` / `QuestionerLocalVLM` are the submission config:**
-`--prompt-variant our_prompt_v3`, `--policy dedup_category_only`, `--temperature 0`.
-`dedup_category_only` applies question-dedup + forced decision only on `category`; other description types are raw model output.
+See **For organizers** above. Same defaults: `our_prompt_v3`,
+`dedup_category_only`, temperature 0. Serve `weights/hf/merged`.
 
-Serve the merged questioner (no LoRA flag). The served name must match `QUESTIONER_MODEL_ID`:
-
-```bash
-hf download Njoker/CoIN_Challenge_NY --include "merged/*" --local-dir weights/hf_merged
-vllm serve weights/hf_merged/merged \
-  --host 0.0.0.0 --port 8001 --dtype bfloat16 --tensor-parallel-size 4 \
-  --max-model-len 6000 --max-num-seqs 2 --gpu-memory-utilization 0.92 \
-  --limit-mm-per-prompt '{"image":8,"video":0}' \
-  --served-model-name Njoker/CoIN_Challenge_NY
-```
-
-Oracle: a local VLM implementing `OracleInterface` (development used Qwen3-VL-32B-Instruct on port 8000).
-
-```bash
-export QUESTIONER_MODEL_ID=Njoker/CoIN_Challenge_NY QUESTIONER_VLLM_PORT=8001
-export ORACLE_MODEL_ID=Qwen/Qwen3-VL-32B-Instruct ORACLE_VLLM_PORT=8000
-
-# From repo root or from code/. Images: mkdir images && hf download --repo-type dataset e-zorzi/images_coin_challenge --local-dir images
-python eval_model.py 0 <N> --local 1 --description-type all
-```
-
-Hidden test: put `episodes_test.jsonl` in the repo root or `code/`, then:
-
-```bash
-python eval_model.py 0 <N> --local 1 --description-type all --run-type test
-```
-
-Or `export EPISODES_JSONL_OVERRIDE=/path/to/episodes_test.jsonl`.
-
-SAP is `PROMPT_VARIANTS["our_prompt_v3"]` in `code/Questioner.py`. The category-only rule is `_is_duplicate_question` / `_force_decide`.
+SAP is `PROMPT_VARIANTS["our_prompt_v3"]` in `code/Questioner.py`.
+Category-only dedup is `_is_duplicate_question` / `_force_decide`.
 
 Aggregate metrics:
 
