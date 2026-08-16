@@ -44,8 +44,9 @@ Stage~2 (Mix-FT) matches the synthetic-only fine-tune on FR
 (0.713 vs.\ 0.709) while cutting NQ from 3.45 to 0.67. The submitted
 weights (Full-FT) additionally absorb the holdout episodes with the
 same recipe. Ablations cover oracle identity, prompt family, backbone
-choice (including a full Qwen3.6-27B replica that does \emph{not}
-transfer), ask/conclude ratio, and a rejected chain-rebalancing branch.
+choice (including a full Qwen3.6-27B replica that underperforms 32B
+Mix-FT on holdout FR), ask/conclude ratio, and a rejected
+chain-rebalancing branch.
 \end{abstract}
 
 \section{Task, Metrics, and Protocol}
@@ -224,7 +225,7 @@ An intermediate 32B fine-tune on Profile-V2 labels raised category SR
 from native V1's 0.436 to 0.529 but lagged on several specific types.
 That split---gains concentrated on type-only descriptions, losses on
 richer ones---motivated rebuilding labels under a stricter protocol
-rather than shipping the V2 model.
+rather than submitting the V2 model.
 
 SAP (frozen for all later data and inference) keeps V1's three-step
 compare protocol and V2's length cap, and adds stricter decision
@@ -309,9 +310,9 @@ transformers backend; 32B with vLLM.}
 \label{sec:data}
 
 Labels are generated with SAP frozen, so the supervised distribution
-matches inference. We never train on raw code-variable dumps; each
-sample is a (description, candidate image, optional dialogue,
-motivation, score, question) tuple.
+matches inference. Each training example is a complete
+(description, candidate image, optional dialogue, motivation, score,
+question) tuple.
 
 \subsection{Synthetic instances}
 Candidate images come primarily from Habitat renders of CoIN-Bench /
@@ -456,8 +457,8 @@ on holdout-47.
 
 On the \emph{full} 167 episodes, Syn-FT plus the hybrid policy already
 beats native SAP (mean SR $0.814$ / FR $0.714$ / NQ $3.88$ vs.\
-$0.739/0.653/0.40$). Mix-FT/Full-FT exist to keep that accuracy while
-making NQ competition-plausible.
+$0.739/0.653/0.40$). Mix-FT/Full-FT exist to keep that accuracy while holding NQ in a
+range compatible with interactive evaluation.
 
 \subsection{Replica on Qwen3.6-27B}
 \label{sec:q36ft}
