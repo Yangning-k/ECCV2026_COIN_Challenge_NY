@@ -64,9 +64,6 @@ Requests must use the LoRA module name `Njoker/CoIN_Challenge_NY`.
 ```bash
 hf download Njoker/CoIN_Challenge_NY --include "adapter/*" --local-dir weights/hf
 # Need: weights/hf/adapter/adapter_config.json
-# If adapter/ is missing, LoRA files may still be at the Hub repo root:
-#   hf download Njoker/CoIN_Challenge_NY --local-dir weights/hf
-#   then use weights/hf instead of weights/hf/adapter below.
 ```
 
 ```bash
@@ -141,8 +138,10 @@ https://huggingface.co/Njoker/CoIN_Challenge_NY
 | Artifact | Location in that repo |
 | --- | --- |
 | Option 1: merged bf16 32B (~63 GB) | `merged/` |
-| Option 2: LoRA adapter (~168 MB) | `adapter/` (files may still be at the Hub repo root until moved) |
+| Option 2: LoRA adapter (~168 MB) | `adapter/` |
 | Base for Option 2 | [Qwen/Qwen3-VL-32B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-32B-Instruct) |
+
+Hub layout is `adapter/` and `merged/` only. The repo root has the model card, not weight files.
 
 ---
 
