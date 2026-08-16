@@ -19,6 +19,10 @@ for the CoIN Challenge 2026}
 
 \begin{document}
 \maketitle
+\noindent\textit{Code:}
+\url{https://github.com/Yangning-k/ECCV2026_COIN_Challenge_NY}\\
+\textit{Weights:}
+\url{https://huggingface.co/Njoker/CoIN_Challenge_NY}
 
 \begin{abstract}
 We present a questioner for the CoIN Challenge 2026. The agent is
@@ -39,41 +43,62 @@ transfer), ask/conclude ratio, and a rejected chain-rebalancing branch.
 
 \section{Task, Metrics, and Protocol}
 
-Given a natural-language description of a target object and a stream of
-candidate images, the agent must accept the candidate as the target
-instance (score 2), reject it (score 0), or ask the oracle one
-clarifying question (score 1)~\cite{zorzi2026coinqa,taioli2025coin}.
-Official training data comprise 167 episodes (50 categories, 367
-images) and six description types: category, color, context,
-color+feature, color+context, and color+context+feature.
+The official protocol presents a natural-language target description and a
+stream of candidate images. At each step the agent emits exactly one of
+three actions~\cite{zorzi2026coinqa,taioli2025coin}: \emph{match} the
+candidate to the description, \emph{reject} it, or \emph{ask} the oracle
+one clarifying question about the hidden target image. We keep the
+challenge output schema
+\texttt{<motivation>}/\texttt{<score>}/\texttt{<question>} with
+$\mathrm{score}\in\{0,1,2\}$, mapped onto the environment as:
+score~2 $\mapsto$ match (\texttt{conclusion=True});
+score~0 $\mapsto$ reject (\texttt{conclusion=False});
+score~1 $\mapsto$ ask (\texttt{conclusion=None}, one question).
+Official training data comprise 167 episodes (50 categories, 367 images)
+and six description types, identified in the JSONL as
+\texttt{category}, \texttt{color}, \texttt{context},
+\texttt{color\_feature}, \texttt{color\_context}, and
+\texttt{color\_context\_feature} (tables use color+feature, color+context,
+and color+ctx+feat.).
 
 \paragraph{Metrics.}
-SR is the per-episode fraction of correct decisions, averaged over
-episodes: the denominator is the number of successes if the episode is
-fully solved, otherwise successes$+1$ (the episode stops at the first
-error). FR is the fraction of episodes in which every decision is
-correct. NQ/obs is the per-episode ratio of questions to observations,
-then averaged. Ask rate is the fraction of episodes with at least one
-question. We do \emph{not} use a global $\sum$successes$/\sum$observations
-ratio: that statistic weights long episodes and can exceed 1 when
-observations are de-duplicated by pixel identity.
+We use the names from QAsk-Nav~\cite{zorzi2026coinqa}. Let
+$n_{\mathrm{succ}}$ be the number of correct decisions in an episode and
+$n_{\mathrm{dist}}$ the number of candidates. The episode stops at the
+first error, so the number of attempted decisions is
+$n_{\mathrm{dec}}=n_{\mathrm{succ}}$ if
+$n_{\mathrm{succ}}\ge n_{\mathrm{dist}}$, else $n_{\mathrm{succ}}+1$.
+\textbf{SR} is the mean over episodes of $n_{\mathrm{succ}}/n_{\mathrm{dec}}$.
+\textbf{FR} is the fraction of episodes with
+$n_{\mathrm{succ}}\ge n_{\mathrm{dist}}$.
+\textbf{NQ} is the mean over episodes of (questions)$/$(unique
+observations), with observations grouped by image identity as in the
+official eval dump. Ask rate is the fraction of episodes with at least
+one question. We do \emph{not} use a global
+$\sum$successes$/\sum$observations ratio: it weights long episodes and
+can exceed 1 under pixel de-duplication. The paper also reports
+wall-clock Time; we log it but do not select on it.
 
 \paragraph{Selection rule.}
 FR first, SR second, lower NQ as tie-break. All reported numbers use
 temperature 0. Unless noted, development uses a frozen local oracle,
-Qwen3-VL-32B-Instruct. Model selection never trains on a 47-episode
-holdout obtained by splitting official episodes along shared-image
-connected components (zero image leakage).
+Qwen3-VL-32B-Instruct---not necessarily the hidden-test oracle.
+Model selection never trains on a 47-episode holdout obtained by
+splitting official episodes along shared-image connected components
+(zero image leakage). That holdout is a subset of official \emph{train},
+not the hidden test.
 
 \paragraph{Naming.}
-For readability we use paper names rather than checkpoint identifiers.
 The frozen inference/data prompt is the \emph{Structured Attribute
-Prompt} (SAP). Fine-tuned 32B variants are Syn-FT (synthetic Stage~2
-only), Mix-FT (Stage~2 continued on official train-split pairs),
-Chain-FT (a rejected rebalancing branch), and Full-FT (submitted;
-Mix-FT recipe with holdout pairs included). Release adapters in the
-package are labeled \texttt{v3d}/\texttt{v3o}/\texttt{v3p}/\texttt{v3f}
-respectively.
+Prompt} (SAP; code \texttt{our\_prompt\_v3}).
+\emph{Raw decoding} (code \texttt{baseline}) executes the parsed score
+with no post-hoc override.
+The \emph{hybrid} policy (code \texttt{dedup\_category\_only}) applies
+question-dedup and a forced decision only on \texttt{category}.
+Fine-tuned 32B variants: Syn-FT (synthetic Stage~2 only; \texttt{v3d}),
+Mix-FT (Stage~2 continued on official train-split pairs; \texttt{v3o}),
+Chain-FT (rejected rebalancing; \texttt{v3p}), Full-FT (submitted;
+Mix-FT recipe with holdout pairs; \texttt{v3f}).
 
 \section{Oracle Identity}
 \label{sec:oracle}
@@ -81,8 +106,7 @@ respectively.
 With the challenge-provided 7B questioner and the paper prompt under
 raw decoding, we compared Qwen2.5-VL-32B-Instruct and
 Qwen3-VL-32B-Instruct as oracles on all 167 episodes
-(Table~\ref{tab:oracle}). Mean $|\Delta\mathrm{SR}|$ is below 0.01 on
-every type. Under this low-ask regime the questioner almost never
+(Table~\ref{tab:oracle}). $|\Delta\mathrm{SR}|\le 0.007$ on every type. Under this low-ask regime the questioner almost never
 queries the oracle, so oracle identity cannot move the metric. Qwen3 is
 slightly better on color/context and slightly worse on category; we
 freeze Qwen3-VL-32B as the development oracle thereafter. The practical
@@ -268,8 +292,9 @@ color+ctx+feat. & 0.868/0.796/0.071 & 0.839/0.778/0.127 \\
 Mean & \textbf{0.748}/\textbf{0.665}/\textbf{0.182} & 0.739/0.653/0.402 \\
 \bottomrule
 \end{tabular}
-\caption{Zero-shot SAP, same oracle and policy, full official set.
-Qwen3.6 asks less and scores slightly higher.}
+\caption{Zero-shot SAP, raw decoding, same 32B oracle, full official set.
+Qwen3.6 asks less and scores slightly higher. Qwen3.6 was served with a
+transformers backend; 32B with vLLM.}
 \label{tab:q36zs}
 \end{table}
 
@@ -306,7 +331,8 @@ full schema with an ask-weighted mix. A 10:1 ask:conclude branch is
 dominated by 5:1 on a 60-episode slice (SR 0.773 / FR 0.669 / NQ 7.12
 vs.\ 0.806 / 0.700 / 4.63); extra ask mass amplifies repeat questions.
 We keep 5:1 (8{,}259 Stage~2 examples). Training is QLoRA, 4-bit NF4,
-LoRA rank 16 ($\approx 40$M trainable parameters on 32B), images
+LoRA rank 16 ($39.8$M trainable parameters on 32B; targets
+\texttt{q\_proj}/\texttt{k\_proj}/\texttt{v\_proj}/\texttt{o\_proj}), images
 resized to $224^2$, 7-GPU DDP, learning rate $1\times 10^{-4}$ for
 Stages~1--2 and $5\times 10^{-5}$ for official continuations, one epoch
 per stage.
@@ -351,9 +377,9 @@ hand-rebalanced chains. Chain-FT is not used.
 
 Syn-FT on category-only descriptions enters repeat-ask loops. A
 lightweight rule detects near-duplicate questions (Jaccard $\geq 0.6$
-over content tokens of length $\geq 2$) or budget exhaustion, then
-re-prompts once to decide from answers already collected (fallback:
-reject). Applying this rule to \emph{all} types cuts NQ to 0.74 but
+over content tokens of length $\geq 2$) or a per-observation budget of
+two questions, then re-prompts once to decide from answers already
+collected (fallback: reject). Applying this rule to \emph{all} types cuts NQ to 0.74 but
 costs up to 13pp FR on color. Restricting it to category is strictly
 helpful on the full 167 set (category SR $0.663\rightarrow 0.725$,
 FR $0.569\rightarrow 0.641$, NQ $10.2\rightarrow 1.05$). All reported
@@ -377,16 +403,17 @@ is dominated on FR.
 \small
 \begin{tabular}{lccc}
 \toprule
-Qwen3-VL-32B, hybrid policy, holdout-47 & SR & FR & NQ/obs \\
+Setting (holdout-47, six-type mean) & SR & FR & NQ/obs \\
 \midrule
-Zero-shot + SAP & 0.766 & 0.688 & 0.41 \\
-Syn-FT & \textbf{0.823} & 0.709 & 3.45 \\
-Mix-FT (selected) & 0.801 & \textbf{0.713} & 0.67 \\
-Chain-FT (not used) & 0.772 & 0.677 & 0.54 \\
+Zero-shot + SAP, raw decoding & 0.766 & 0.688 & 0.41 \\
+Syn-FT + hybrid & \textbf{0.823} & 0.709 & 3.45 \\
+Mix-FT + hybrid (selected) & 0.801 & \textbf{0.713} & 0.67 \\
+Chain-FT + hybrid (not used) & 0.772 & 0.677 & 0.54 \\
 \bottomrule
 \end{tabular}
-\caption{Leakage-free holdout, six types averaged. Mix-FT is selected
-by FR, then SR, then NQ.}
+\caption{Leakage-free holdout, six types averaged. Zero-shot uses raw
+decoding; fine-tunes use the hybrid policy. Mix-FT is selected by FR,
+then SR, then NQ.}
 \label{tab:holdout}
 \end{table}
 
@@ -428,11 +455,13 @@ making NQ competition-plausible.
 \subsection{Replica on Qwen3.6-27B}
 \label{sec:q36ft}
 We repeat Stage~1, Stage~2 (5:1), and Mix-FT on Qwen3.6-27B with the
-same files, hyperparameters, holdout, SAP, and hybrid policy
-(Table~\ref{tab:q36ft}). Native Qwen3.6 was stronger; after the same
-SFT recipe both Syn-FT and Mix-FT trail the 32B counterparts on FR
-and SR. Mix-FT NQ is competitive (0.54 vs.\ 0.67) but cannot overturn
-the FR gap ($-6.4$pp). We therefore do not switch the submission.
+same files, SAP, hybrid policy, image size, and LoRA rank
+(Table~\ref{tab:q36ft}). The 3.6 replica used learning rate
+$5\times 10^{-5}$ for all stages (32B used $1\times 10^{-4}$ for
+Stages~1--2). Native Qwen3.6 was stronger; after SFT both Syn-FT and
+Mix-FT trail the 32B counterparts on FR and SR. Mix-FT NQ is
+competitive (0.54 vs.\ 0.67) but cannot overturn the FR gap
+($-6.4$pp). We therefore do not switch the submission.
 The likely cause is a mismatch between an already-conservative
 zero-shot prior and ask-heavy Stage~2 data, not a failed load: a
 smoke test of the 3.6 adapter produces well-formed SAP outputs.
@@ -456,19 +485,35 @@ preserve Qwen3.6's zero-shot advantage; 32B Mix-FT remains selected.}
 \section{Submitted System}
 
 Questioner: Qwen3-VL-32B-Instruct with the Full-FT LoRA adapter
-(rank 16), SAP, temperature 0, hybrid policy (forced decision only on
-category-only descriptions). Development oracle: Qwen3-VL-32B-Instruct.
-The package includes the adapter, optional merged bf16 weights, Mix-FT
-as a clean-benchmark backup, data and training scripts, and the frozen
-prompt. Serve with vLLM \texttt{--enable-lora} on the bf16 base, or
-serve the merged checkpoint directly.
+(rank 16), SAP (\texttt{our\_prompt\_v3}), temperature 0, hybrid policy
+(\texttt{dedup\_category\_only}: forced decision only on
+\texttt{category}). Development oracle: Qwen3-VL-32B-Instruct.
+Do not pass \texttt{--prompt-variant} or \texttt{--policy}: repository
+defaults are already this configuration.
+The Hugging Face repo provides two equivalent artifacts: merged bf16
+weights under \texttt{merged/} ($\sim$63\,GB) or the LoRA under
+\texttt{adapter/} ($\sim$168\,MB) served with vLLM \texttt{--enable-lora}
+on the public Qwen3-VL-32B-Instruct base. Step-by-step hidden-test
+commands are in the repository README.
+
+\paragraph{Limitations.}
+(i)~Holdout-47 numbers are leakage-free w.r.t.\ Mix-FT but are still
+drawn from official train, not the hidden test.
+(ii)~Full-FT absorbs those 47 episodes, so Mix-FT on holdout remains
+the only clean selection number; Full-FT is reported via a first-60
+sanity slice only.
+(iii)~All development numbers use a local Qwen3-VL-32B oracle; the
+organizers' hidden-test oracle may differ.
+(iv)~Mix-FT trades some SR on context and color+feature for much lower
+NQ and a higher category FR.
 
 \section{Reproducibility Notes}
-Connected-component episode IDs, Stage~2 manifests, and the exact SAP
-string live in the code directory. Metrics are recomputed from dumped
-JSON with a single script that implements Section~1. Continuation runs
-always start from Syn-FT, not from Mix-FT, so Mix-FT and Full-FT are
-parallel forks rather than a chain.
+Connected-component episode IDs (\texttt{official\_split.json}),
+Stage~2 manifests, and the exact SAP string live in the code directory.
+Metrics are recomputed from dumped JSON with
+\texttt{stats\_results.py}, which implements Section~1.
+Continuation runs always start from Syn-FT, not from Mix-FT, so Mix-FT
+and Full-FT are parallel forks rather than a chain.
 
 \begin{thebibliography}{9}
 \bibitem{taioli2025coin}
