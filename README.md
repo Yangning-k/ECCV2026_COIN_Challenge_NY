@@ -31,12 +31,24 @@ source scripts/install_vllm.sh
 
 ### B. Download the model
 
-Use the **merged 32B** folder `merged/`, not the LoRA adapter files.
+**Preferred:** the merged 32B folder `merged/` (serve it directly, no LoRA flag).
 
 ```bash
 hf download Njoker/CoIN_Challenge_NY --local-dir weights/hf
-# After download you must have: weights/hf/merged/config.json
-# and weights/hf/merged/model-00001-of-00014.safetensors
+```
+
+If `weights/hf/merged/config.json` exists, go to C.
+
+**Fallback if `merged/` is not on the Hub yet:** the LoRA is at the Hub **repo root**
+(`adapter_config.json` + `adapter_model.safetensors`). Merge onto the public base,
+then serve the result as in C:
+
+```bash
+# Use the vLLM env (needs a transformers that can load Qwen3-VL, plus peft).
+python code/merge_lora_qwen3.py \
+  --base Qwen/Qwen3-VL-32B-Instruct \
+  --adapter weights/hf \
+  --out weights/hf/merged
 ```
 
 ### C. Serve the questioner (vLLM)
@@ -113,8 +125,8 @@ https://huggingface.co/Njoker/CoIN_Challenge_NY
 
 | Artifact | Location in that repo |
 | --- | --- |
-| **Submitted LoRA adapter (Full-FT)** | `adapter/` (files may still be at repo root until moved) |
-| Merged bf16 32B weights | `merged/` |
+| **Submitted LoRA adapter (Full-FT)** | Hub **repo root** (`adapter_config.json`, `adapter_model.safetensors`); may later move to `adapter/` |
+| Merged bf16 32B weights | `merged/` (upload in progress; use the LoRA merge fallback in B if absent) |
 | Base model | [Qwen/Qwen3-VL-32B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-32B-Instruct) |
 
 ---

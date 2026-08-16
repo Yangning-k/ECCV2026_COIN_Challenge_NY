@@ -10,7 +10,7 @@ from pathlib import Path
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base",
-                    default="/shared_disk/models/huggingface/Qwen3-VL-32B-Instruct")
+                    default="Qwen/Qwen3-VL-32B-Instruct")
     ap.add_argument("--adapter", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--gpu", default=None, help="comma-separated GPU indices")
