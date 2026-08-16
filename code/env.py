@@ -124,7 +124,9 @@ class QAEnv(gym.Env):
 
         self.current_step = 0
 
-        self.current_target_image = Image.open(self.current_episode_data["path"])
+        self.current_target_image = Image.open(
+            self._resolve_image_path(self.current_episode_data["path"])
+        )
         # TODO select type of task here here
         self.current_task = self.current_episode_data["tasks"][self.task_type]
         self.current_distractor_idx = 0
@@ -182,14 +184,27 @@ class QAEnv(gym.Env):
         answer = None
         if question is not None:
             answer = self.ask_oracle(prompt_to_use, self.current_target_image)
+        image_path = self._resolve_image_path(
+            self.distractors[self.current_distractor_idx]["path"]
+        )
         return dict(
-            # Current observation (based on the current obs index)
-            image=np.array(
-                Image.open(self.distractors[self.current_distractor_idx]["path"])
-            ),
-            image_path=self.distractors[self.current_distractor_idx]["path"],
+            image=np.array(Image.open(image_path)),
+            image_path=str(image_path),
             answer=answer,
         )
+
+    def _resolve_image_path(self, path: str) -> Path:
+        raw = Path(path)
+        if raw.is_file():
+            return raw
+        search = [Path.cwd() / raw]
+        if self.jsonl_path.is_file():
+            search.append(self.jsonl_path.parent / raw)
+            search.append(self.jsonl_path.parent.parent / raw)
+        for candidate in search:
+            if candidate.is_file():
+                return candidate
+        return raw
 
     def _compute_reward(self, action: dict) -> float:
         """Compute reward for the current step."""

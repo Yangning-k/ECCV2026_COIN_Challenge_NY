@@ -381,9 +381,9 @@ class QuestionerLocalVLM(QuestionerInterface):
         info,
         model_id: str,
         port: int = 8001,
-        prompt_variant: str = "paper",
+        prompt_variant: str = "our_prompt_v3",
         temperature: float = 0.0,
-        policy: str = "baseline",
+        policy: str = "dedup_category_only",
         description_type: str | None = None,
         max_questions_per_obs: int = 2,
     ):

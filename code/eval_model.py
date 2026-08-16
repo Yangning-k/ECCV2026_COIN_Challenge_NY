@@ -6,20 +6,16 @@ from env import QAEnv
 import time
 import argparse
 import os
+from pathlib import Path
 from Questioner import QuestionerLocalVLM
 
 ORACLE_MODEL_ID = "gemini-3-flash"
-# Default local Oracle: the vLLM server currently exposed on this machine.
-DEFAULT_LOCAL_ORACLE_MODEL_ID = (
-    "/shared_disk/users/ning.yang/checkpoints/Qwen2.5-VL-32B-Instruct"
-)
+DEFAULT_LOCAL_ORACLE_MODEL_ID = "Qwen/Qwen3-VL-32B-Instruct"
 DEFAULT_LOCAL_ORACLE_PORT = 8000
-DEFAULT_QUESTIONER_MODEL_ID = (
-    "/shared_disk/users/ning.yang/Codes/coin_challenge/checkpoints/"
-    "Qwen2.5-VL-7B-Instruct-tuned-final-questions-v1-2"
-)
+DEFAULT_QUESTIONER_MODEL_ID = "Njoker/CoIN_Challenge_NY"
 DEFAULT_QUESTIONER_PORT = 8001
 EPISODES_JSONL = "episodes_{run_type}.jsonl"
+_CODE_DIR = Path(__file__).resolve().parent
 
 parser = argparse.ArgumentParser(prog="eval-QA-model")
 parser.add_argument("start_idx", type=int, help="First trajectory index")
@@ -37,7 +33,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--prompt-variant",
-    default="paper",
+    default="our_prompt_v3",
     choices=[
         "paper",
         "example",
@@ -61,7 +57,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--policy",
-    default="anti_fp",
+    default="dedup_category_only",
     choices=["baseline", "anti_fp", "force_ask_short", "uncertainty_gate",
              "dedup_force_decide", "dedup_category_only"],
     help="Decision policy. baseline=raw model; anti_fp=block premature match on "
@@ -85,12 +81,30 @@ parser.add_argument(
     default="results",
     help="Directory to write result JSON files.",
 )
+parser.add_argument(
+    "--run-type",
+    default=os.environ.get("RUN_TYPE", "train"),
+    help="Episode split name. Looks for episodes_<run-type>.jsonl "
+    "(use 'test' for the hidden test set).",
+)
 
 args = parser.parse_args()
 
 local = args.local
 
-run_type = "train"
+run_type = args.run_type
+
+
+def _resolve_episodes_path(split: str) -> str:
+    override = os.environ.get("EPISODES_JSONL_OVERRIDE")
+    if override:
+        return override
+    name = EPISODES_JSONL.format(run_type=split)
+    for base in (Path.cwd(), _CODE_DIR, _CODE_DIR.parent):
+        candidate = base / name
+        if candidate.is_file():
+            return str(candidate)
+    return name
 
 ALLOWED_DESCPRITION_TYPES = [
     "all",
@@ -186,13 +200,12 @@ if __name__ == "__main__":
     else:
         task_types = [args.description_type]
 
-    episodes_path = os.environ.get(
-        "EPISODES_JSONL_OVERRIDE"
-    ) or EPISODES_JSONL.format(run_type=run_type)
+    episodes_path = _resolve_episodes_path(run_type)
     if not os.path.exists(episodes_path):
         raise FileNotFoundError(
             f"Episodes file not found: {episodes_path}. "
-            "Expected episodes_train.jsonl in the repo root."
+            "Place episodes_{run_type}.jsonl next to eval_model.py, in the "
+            "repo root, or set EPISODES_JSONL_OVERRIDE."
         )
 
     for task_type in task_types:
