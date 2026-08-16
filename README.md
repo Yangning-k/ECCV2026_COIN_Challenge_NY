@@ -29,31 +29,23 @@ source scripts/install.sh
 source scripts/install_vllm.sh
 ```
 
-### B. Download the model
+Pick **one** of the two weight options below. They are the same submitted
+system. Then go to C. Eval (`QUESTIONER_MODEL_ID`) is identical for both.
 
-**Preferred:** the merged 32B folder `merged/` (serve it directly, no LoRA flag).
+| | Option 1 — merged 32B | Option 2 — LoRA only |
+| --- | --- | --- |
+| Download | `merged/` (~63 GB) | `adapter/` (~168 MB) |
+| Extra | none | public base [Qwen/Qwen3-VL-32B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-32B-Instruct) |
+| Serve | merged checkpoint, no LoRA flag | base + `--enable-lora` |
 
-```bash
-hf download Njoker/CoIN_Challenge_NY --local-dir weights/hf
-```
-
-If `weights/hf/merged/config.json` exists, go to C.
-
-**Fallback if `merged/` is not on the Hub yet:** the LoRA is at the Hub **repo root**
-(`adapter_config.json` + `adapter_model.safetensors`). Merge onto the public base,
-then serve the result as in C:
+### B1. Option 1 — download and serve the merged weights
 
 ```bash
-# Use the vLLM env (needs a transformers that can load Qwen3-VL, plus peft).
-python code/merge_lora_qwen3.py \
-  --base Qwen/Qwen3-VL-32B-Instruct \
-  --adapter weights/hf \
-  --out weights/hf/merged
+hf download Njoker/CoIN_Challenge_NY --include "merged/*" --local-dir weights/hf
+# Need: weights/hf/merged/config.json
 ```
 
-### C. Serve the questioner (vLLM)
-
-`--served-model-name` must equal `QUESTIONER_MODEL_ID` in step E.
+`--served-model-name` must equal `QUESTIONER_MODEL_ID` in step D.
 
 ```bash
 vllm serve weights/hf/merged \
@@ -63,7 +55,30 @@ vllm serve weights/hf/merged \
   --served-model-name Njoker/CoIN_Challenge_NY
 ```
 
-### D. Hidden-test files and oracle
+### B2. Option 2 — download and serve the LoRA adapter
+
+vLLM will pull the public Qwen3-VL-32B base if it is not cached. Do **not**
+set `--served-model-name` here: that name would alias the **unadapted** base.
+Requests must use the LoRA module name `Njoker/CoIN_Challenge_NY`.
+
+```bash
+hf download Njoker/CoIN_Challenge_NY --include "adapter/*" --local-dir weights/hf
+# Need: weights/hf/adapter/adapter_config.json
+# If adapter/ is missing, LoRA files may still be at the Hub repo root:
+#   hf download Njoker/CoIN_Challenge_NY --local-dir weights/hf
+#   then use weights/hf instead of weights/hf/adapter below.
+```
+
+```bash
+vllm serve Qwen/Qwen3-VL-32B-Instruct \
+  --host 0.0.0.0 --port 8001 --dtype bfloat16 --tensor-parallel-size 4 \
+  --max-model-len 6000 --max-num-seqs 2 --gpu-memory-utilization 0.92 \
+  --limit-mm-per-prompt '{"image":8,"video":0}' \
+  --enable-lora --max-lora-rank 16 \
+  --lora-modules Njoker/CoIN_Challenge_NY=weights/hf/adapter
+```
+
+### C. Hidden-test files and oracle
 
 Keep your official eval harness, or use `eval_model.py` in this repo.
 
@@ -75,7 +90,7 @@ Keep your official eval harness, or use `eval_model.py` in this repo.
 3. Serve your Oracle VLM on port 8000 (`OracleInterface` / OpenAI-compatible
    vLLM). Development used Qwen3-VL-32B-Instruct.
 
-### E. Run (this repo's eval)
+### D. Run (this repo's eval)
 
 From the **repository root**. Replace `<N>` with the number of test episodes.
 
@@ -95,7 +110,7 @@ export EPISODES_JSONL_OVERRIDE=/path/to/hidden_test.jsonl
 python eval_model.py 0 <N> --local 1 --description-type all
 ```
 
-### F. If you keep the official starter and only drop in our Questioner
+### E. If you keep the official starter and only drop in our Questioner
 
 Copy `code/Questioner.py` over the starter `Questioner.py` (keep starter
 `eval_model.py` / `env.py`). Wire the questioner as:
@@ -113,9 +128,9 @@ questioner = QuestionerLocalVLM(
 )
 ```
 
-Set the same `QUESTIONER_*` environment variables as in step E, and serve
-`weights/hf/merged` as in step C. Pass `description_type` through from the
-eval loop so category-only dedup is applied only on category episodes.
+Set the same `QUESTIONER_*` environment variables as in step D, and serve
+with **B1 or B2**. Pass `description_type` through from the eval loop so
+category-only dedup is applied only on category episodes.
 
 ---
 
@@ -125,9 +140,9 @@ https://huggingface.co/Njoker/CoIN_Challenge_NY
 
 | Artifact | Location in that repo |
 | --- | --- |
-| **Submitted LoRA adapter (Full-FT)** | Hub **repo root** (`adapter_config.json`, `adapter_model.safetensors`); may later move to `adapter/` |
-| Merged bf16 32B weights | `merged/` (upload in progress; use the LoRA merge fallback in B if absent) |
-| Base model | [Qwen/Qwen3-VL-32B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-32B-Instruct) |
+| Option 1: merged bf16 32B (~63 GB) | `merged/` |
+| Option 2: LoRA adapter (~168 MB) | `adapter/` (files may still be at the Hub repo root until moved) |
+| Base for Option 2 | [Qwen/Qwen3-VL-32B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-32B-Instruct) |
 
 ---
 
@@ -184,7 +199,7 @@ hf download --repo-type dataset e-zorzi/images_coin_challenge --local-dir images
 ## Inference (submitted system)
 
 See **For organizers** above. Same defaults: `our_prompt_v3`,
-`dedup_category_only`, temperature 0. Serve `weights/hf/merged`.
+`dedup_category_only`, temperature 0. Serve with B1 (merged) or B2 (LoRA).
 
 SAP is `PROMPT_VARIANTS["our_prompt_v3"]` in `code/Questioner.py`.
 Category-only dedup is `_is_duplicate_question` / `_force_decide`.
